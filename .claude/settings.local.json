@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(npm config *)",
+      "Bash(npx --yes create-next-app@14 . --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\")",
+      "Bash(mv .claude ../claude_backup)",
+      "Bash(mv ../claude_backup .claude)",
+      "Bash(npm install *)",
+      "Bash(npx shadcn@latest init --defaults)",
+      "PowerShell($env:NODE_TLS_REJECT_UNAUTHORIZED=\"0\"; Set-Location \"C:\\\\Users\\\\João Victor\\\\Desktop\\\\CURSOIA\\\\aula1login\"; npx shadcn@4.9.0 init --defaults 2>&1)",
+      "PowerShell($env:NODE_TLS_REJECT_UNAUTHORIZED=\"0\"; Set-Location \"C:\\\\Users\\\\João Victor\\\\Desktop\\\\CURSOIA\\\\aula1login\"; npx shadcn@latest add input card badge progress 2>&1)",
+      "Bash(npm run *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
