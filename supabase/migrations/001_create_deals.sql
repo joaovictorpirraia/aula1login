@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS deals (
   client_name  text NOT NULL,
   value        numeric(12, 2) NOT NULL,
   status       text NOT NULL CHECK (status IN ('open', 'won', 'lost')),
-  created_at   timestamp DEFAULT now(),
-  closed_at    timestamp,
+  created_at   timestamptz DEFAULT now(),
+  closed_at    timestamptz,
   closed_date  date,
-  updated_at   timestamp DEFAULT now()
+  updated_at   timestamptz DEFAULT now()
 );

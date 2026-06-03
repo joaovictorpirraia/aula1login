@@ -32,5 +32,6 @@ CREATE POLICY "goals: leitura própria"
 -- Absence of policy = implicit DENY for authenticated users.
 -- Write operations require the service role key, which bypasses RLS by design in PostgREST.
 -- DO NOT add INSERT/UPDATE/DELETE policies here — that would open the table to all users.
--- Explanation: PostgREST executes queries as the 'postgres' role when a service role JWT
--- is used, bypassing all RLS policies. Admin scripts use this approach to write goals.
+-- Explanation: The service role JWT grants the 'service_role' database role, which has
+-- BYPASSRLS privilege in Supabase's default config. This means RLS policies are not
+-- evaluated. Admin scripts use this to write goals without needing an explicit policy.

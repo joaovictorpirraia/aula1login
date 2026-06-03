@@ -9,7 +9,3 @@ CREATE INDEX IF NOT EXISTS idx_deals_user_status_date
 -- because the recent deals query sorts by created_at, not closed_date
 CREATE INDEX IF NOT EXISTS idx_deals_user_created
   ON deals (user_id, created_at DESC);
-
--- Monthly goal lookup: WHERE month = date_trunc('month', now())::date
-CREATE INDEX IF NOT EXISTS idx_goals_user_month
-  ON monthly_goals (user_id, month);
