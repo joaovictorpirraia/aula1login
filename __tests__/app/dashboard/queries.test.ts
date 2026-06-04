@@ -101,6 +101,16 @@ describe('getOpenDealsCount', () => {
     const result = await getOpenDealsCount()
     expect(result).toBe(0)
   })
+
+  it('throws on Supabase error', async () => {
+    const mockChain = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockResolvedValue({ count: null, error: { message: 'DB error' } }),
+    }
+    mockSupabase.from.mockReturnValue(mockChain)
+
+    await expect(getOpenDealsCount()).rejects.toThrow('DB error')
+  })
 })
 
 describe('getMonthlyGoal', () => {
@@ -126,6 +136,17 @@ describe('getMonthlyGoal', () => {
 
     const result = await getMonthlyGoal()
     expect(result).toBeNull()
+  })
+
+  it('throws on Supabase error', async () => {
+    const mockChain = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+    }
+    mockSupabase.from.mockReturnValue(mockChain)
+
+    await expect(getMonthlyGoal()).rejects.toThrow('DB error')
   })
 })
 
@@ -166,6 +187,19 @@ describe('getChartData', () => {
     const result = await getChartData()
     expect(result).toEqual([])
   })
+
+  it('throws on Supabase error', async () => {
+    const mockChain = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      gte: jest.fn().mockReturnThis(),
+      lt: jest.fn().mockReturnThis(),
+      order: jest.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+    }
+    mockSupabase.from.mockReturnValue(mockChain)
+
+    await expect(getChartData()).rejects.toThrow('DB error')
+  })
 })
 
 describe('getRecentDeals', () => {
@@ -196,5 +230,16 @@ describe('getRecentDeals', () => {
 
     const result = await getRecentDeals()
     expect(result).toEqual([])
+  })
+
+  it('throws on Supabase error', async () => {
+    const mockChain = {
+      select: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+    }
+    mockSupabase.from.mockReturnValue(mockChain)
+
+    await expect(getRecentDeals()).rejects.toThrow('DB error')
   })
 })

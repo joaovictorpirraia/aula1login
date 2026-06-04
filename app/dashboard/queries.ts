@@ -44,7 +44,7 @@ export const getMonthlyGoal = cache(async (): Promise<number | null> => {
     .maybeSingle()
 
   if (error) throw new Error(error.message)
-  return data?.goal_value ? Number(data.goal_value) : null
+  return data?.goal_value != null ? Number(data.goal_value) : null
 })
 
 export const getChartData = cache(async (): Promise<{ date: string; total: number }[]> => {
