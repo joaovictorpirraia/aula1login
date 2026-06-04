@@ -1,7 +1,7 @@
 # CRM Completo — Sidebar + 5 Seções
 
 **Data:** 2026-06-04
-**Status:** Aprovado
+**Status:** Aprovado (revisado após code review)
 
 ---
 
@@ -41,10 +41,33 @@ app/
 
 ```
 app/(crm)/components/
-├── Sidebar.tsx          ← Menu lateral fixo
+├── Sidebar.tsx          ← Menu lateral fixo ('use client' — usa usePathname)
 ├── PageHeader.tsx       ← Título da página + ação primária opcional
-└── Modal.tsx            ← Modal genérico reutilizável
+└── Modal.tsx            ← Modal wrapper com interface definida abaixo
 ```
+
+**Interface de Modal.tsx:**
+```tsx
+interface ModalProps {
+  title: string
+  isOpen: boolean
+  onClose: () => void
+  children: React.ReactNode
+}
+```
+Implementado com shadcn/ui `Dialog`. Cada seção passa seu próprio formulário como `children`. Não é uma abstração de formulário — só encapsula abertura/fechamento e título.
+
+### Obtenção do usuário no layout
+
+`(crm)/layout.tsx` usa `supabase.auth.getSession()` para obter o e-mail do usuário a partir do JWT em cache (sem network call extra ao Supabase). O middleware já garantiu que a sessão é válida:
+
+```tsx
+// layout.tsx — Server Component
+const { data: { session } } = await supabase.auth.getSession()
+const userEmail = session?.user?.email ?? ''
+```
+
+Isso evita um segundo round-trip ao Supabase Auth por page load.
 
 ---
 
@@ -81,12 +104,35 @@ CREATE POLICY "clients: atualização própria"
 CREATE POLICY "clients: deleção própria"
   ON clients FOR DELETE USING (auth.uid() = user_id);
 
+-- Índice de listagem
 CREATE INDEX IF NOT EXISTS idx_clients_user ON clients (user_id, created_at DESC);
+
+-- Unicidade de e-mail por usuário (permite NULL — cliente sem e-mail)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_user_email
+  ON clients (user_id, email)
+  WHERE email IS NOT NULL;
+
+-- Trigger para atualizar updated_at em edições
+CREATE OR REPLACE FUNCTION set_clients_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_clients_updated_at
+BEFORE UPDATE ON clients
+FOR EACH ROW EXECUTE FUNCTION set_clients_updated_at();
 ```
 
 ### Atualização em `deals`
 
 ```sql
+-- client_name torna-se nullable (era NOT NULL) para suportar deals criados via Kanban
+-- que derivam o nome do cliente via JOIN, sem precisar de campo duplicado
+ALTER TABLE deals ALTER COLUMN client_name DROP NOT NULL;
+
 -- client_id nullable — compatibilidade com deals existentes
 ALTER TABLE deals ADD COLUMN client_id uuid REFERENCES clients(id) ON DELETE SET NULL;
 
@@ -94,12 +140,36 @@ ALTER TABLE deals ADD COLUMN client_id uuid REFERENCES clients(id) ON DELETE SET
 CREATE INDEX IF NOT EXISTS idx_deals_client ON deals (client_id);
 ```
 
-- Deals existentes: `client_id = NULL`, `client_name` permanece como texto
-- Deals novos criados via Kanban: `client_id` preenchido + `client_name` derivado do nome do cliente
+**Regra de exibição do nome do cliente:**
+- Se `client_id IS NOT NULL`: exibir `clients.name` via JOIN
+- Se `client_id IS NULL` e `client_name IS NOT NULL`: exibir `client_name` (deal legado)
+- Se ambos nulos: exibir "–"
+
+Esta lógica se aplica a Pipeline, Kanban e qualquer view que liste deals.
+
+### Atualização em `monthly_goals` — política de escrita para usuários
+
+Para que Configurações possa fazer UPSERT via client normal (sem service role em Server Action):
+
+```sql
+-- Adicionar política de escrita para o próprio usuário
+CREATE POLICY "goals: escrita própria"
+  ON monthly_goals FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "goals: atualização própria"
+  ON monthly_goals FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+```
+
+Com essas políticas, `saveMeta` usa `createSupabaseServerClient()` (client normal) em vez do admin client — alinhado com a regra existente de nunca usar service role em Server Actions.
 
 ---
 
 ## Seção 1 — Sidebar (`app/(crm)/components/Sidebar.tsx`)
+
+**`'use client'`** — necessário para `usePathname()`.
 
 **Layout:** fixo à esquerda, 240px de largura, altura full. Em mobile: recolhível via hambúrguer.
 
@@ -108,25 +178,32 @@ CREATE INDEX IF NOT EXISTS idx_deals_client ON deals (client_id);
 ┌─────────────────────┐
 │ ◉ CRM Vendas        │  ← Logo + nome
 ├─────────────────────┤
-│ 📊 Visão Geral      │
-│ 👥 Clientes         │
-│ 📈 Pipeline         │
-│ 🗂  Kanban          │
-│ ⚙️  Configurações   │
+│ 📊 Visão Geral      │  → /dashboard
+│ 👥 Clientes         │  → /clientes
+│ 📈 Pipeline         │  → /pipeline
+│ 🗂  Kanban          │  → /kanban
+│ ⚙️  Configurações   │  → /configuracoes
 ├─────────────────────┤
-│ user@email.com      │  ← E-mail do usuário
-│ [Sair]              │  ← Botão signOut
+│ user@email.com      │
+│ [Sair]              │  ← form action={signOut}
 └─────────────────────┘
 ```
 
-- Link ativo: fundo azul claro, texto azul escuro
+- Link ativo: fundo azul claro, texto azul escuro (detectado por `usePathname()`)
 - Links inativos: texto cinza, hover com fundo cinza suave
-- `usePathname()` para detectar rota ativa
+- `signOut` importado de `@/app/login/actions`
+
+**Props:**
+```tsx
+interface SidebarProps {
+  userEmail: string
+}
+```
 
 **Layout raiz `(crm)/layout.tsx`:**
 ```tsx
 <div className="flex h-screen">
-  <Sidebar userEmail={user.email} />
+  <Sidebar userEmail={userEmail} />
   <main className="flex-1 overflow-y-auto bg-gray-50">
     {children}
   </main>
@@ -144,6 +221,8 @@ Dashboard atual migrado para `app/(crm)/dashboard/page.tsx`. Sem alterações fu
 
 Remove `Header.tsx` — sidebar assume navegação.
 
+As queries existentes em `app/dashboard/queries.ts` são movidas para `app/(crm)/dashboard/queries.ts`. Os componentes `MetricCards`, `SalesChart`, `DealsTable` são movidos para `app/(crm)/dashboard/components/`.
+
 ---
 
 ## Seção 3 — Clientes (`/clientes`)
@@ -151,9 +230,11 @@ Remove `Header.tsx` — sidebar assume navegação.
 ### Funcionalidades
 - Listar todos os clientes do usuário em tabela (Nome, Empresa, E-mail, Telefone, Data)
 - Busca em tempo real por nome ou empresa (client-side filter)
-- Botão "Novo Cliente" → abre modal de criação
-- Ação "Editar" por linha → abre modal com dados preenchidos
-- Ação "Excluir" por linha → confirmação inline antes de deletar
+- Botão "Novo Cliente" → abre Modal com formulário de criação
+- Ação "Editar" por linha → abre Modal com dados preenchidos
+- Ação "Excluir" por linha → confirmação inline com aviso:
+  > "Este cliente tem X deal(s) vinculado(s). Ao excluir, os deals serão mantidos mas perderão a associação com este cliente. Deseja continuar?"
+  > (conta deals via `SELECT COUNT(*) FROM deals WHERE client_id = ?` antes de exibir o modal)
 
 ### Formulário (modal)
 Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
@@ -161,7 +242,7 @@ Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
 ### Server Actions
 - `createClient(formData)` — INSERT em clients
 - `updateClient(id, formData)` — UPDATE em clients
-- `deleteClient(id)` — DELETE em clients
+- `deleteClient(id)` — DELETE em clients (ON DELETE SET NULL propaga para deals)
 
 ### Queries
 - `getClients()` — SELECT * FROM clients ORDER BY created_at DESC
@@ -172,13 +253,14 @@ Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
 
 ### Funcionalidades
 - 3 cards de resumo no topo: total abertos (R$), total ganhos (R$), total perdidos (R$)
-- Taxa de conversão: ganhos / (ganhos + perdidos) × 100%
+- Taxa de conversão: `won + lost > 0 ? (won / (won + lost)) × 100 : 0` — exibe "0%" quando não há deals fechados
 - Barras de progresso visual do funil (abertos → ganhos)
 - Tabela completa de deals com colunas: Cliente, Valor, Status (badge), Data de Fechamento
+  - **Coluna Cliente:** `clients.name` se `client_id` existir; senão `deals.client_name`; senão "–"
 - Filtro por status (Todos / Abertos / Ganhos / Perdidos) — client-side
 
 ### Queries
-- `getPipelineDeals()` — SELECT deals JOIN clients (se client_id existir), ORDER BY created_at DESC
+- Usa `getDealsWithClients()` — query compartilhada com Kanban (ver abaixo)
 
 ---
 
@@ -190,7 +272,7 @@ Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
 ### Card de deal
 ```
 ┌───────────────────┐
-│ Nome do Cliente   │
+│ Nome do Cliente   │  ← clients.name OU deals.client_name OU "–"
 │ R$ 5.000,00       │
 │ [→ Ganho] [→ Perd]│
 └───────────────────┘
@@ -201,17 +283,36 @@ Botões condicionais:
 - Coluna Ganhos: botão "Reabrir"
 - Coluna Perdidos: botão "Reabrir"
 
-Botão "Novo Deal" (canto superior direito) → modal:
+Botão "Novo Deal" (canto superior direito) → Modal:
 - Selecionar cliente (dropdown dos clients cadastrados)
 - Valor (R$)
 - Status inicial: Aberto
 
 ### Server Actions
 - `moveDeal(id, newStatus)` — UPDATE deals SET status = newStatus
-- `createDeal(clientId, value)` — INSERT em deals com client_id e client_name derivado
+- `createDeal(clientId, value)`:
+  1. SELECT name FROM clients WHERE id = clientId (obtém o nome)
+  2. INSERT INTO deals (client_id, client_name, value, status) VALUES (clientId, clientName, value, 'open')
 
-### Queries
-- `getKanbanDeals()` — SELECT deals com client info, agrupados por status
+### Query compartilhada com Pipeline
+
+```typescript
+// Única query para ambas as páginas — evita round-trip duplo
+export const getDealsWithClients = cache(async () => {
+  const supabase = createSupabaseServerClient()
+  const { data, error } = await supabase
+    .from('deals')
+    .select('*, clients(name)')
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(deal => ({
+    ...deal,
+    displayName: deal.clients?.name ?? deal.client_name ?? '–'
+  }))
+})
+```
+
+Pipeline e Kanban chamam `getDealsWithClients()` e filtram client-side por status.
 
 ---
 
@@ -225,10 +326,21 @@ Botão "Novo Deal" (canto superior direito) → modal:
 ### Comportamento
 - Se não existir meta para o mês atual: formulário de criação
 - Se existir: formulário de edição com valor atual preenchido
-- Usa admin client (service role) para INSERT/UPDATE em monthly_goals (tabela sem política de escrita para usuários)
+- Usa `createSupabaseServerClient()` (client normal, **não** admin client) — possível graças às políticas RLS de escrita adicionadas em monthly_goals
 
 ### Server Action
-- `saveMeta(month, value)` — UPSERT em monthly_goals via admin client
+- `saveMeta(month, value)` — UPSERT em monthly_goals via client normal:
+  ```sql
+  INSERT INTO monthly_goals (user_id, month, goal_value)
+  VALUES (auth.uid(), $month, $value)
+  ON CONFLICT (user_id, month) DO UPDATE SET goal_value = $value
+  ```
+
+### Queries
+- `getGoalHistory()` — últimos 6 meses:
+  1. SELECT month, goal_value FROM monthly_goals ORDER BY month DESC LIMIT 6
+  2. Para cada mês: SUM(value) FROM deals WHERE status='won' AND closed_date IN [month_start, month_end)
+  - Executadas em paralelo via Promise.allSettled
 
 ---
 
@@ -239,7 +351,7 @@ Botão "Novo Deal" (canto superior direito) → modal:
 - Paleta: tons de cinza e azul corporativo (consistente com o dashboard existente)
 - Componentes: shadcn/ui (card, badge, button, input, dialog, progress)
 - Fonte: Inter (já configurada)
-- Layout responsivo: sidebar recolhe em mobile
+- Layout responsivo: sidebar recolhe em mobile via hambúrguer
 
 ---
 
