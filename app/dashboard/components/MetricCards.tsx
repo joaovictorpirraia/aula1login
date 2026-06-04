@@ -46,7 +46,7 @@ export function MetricCards({ totalSales, openDeals, goal }: MetricCardsProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {goal == null || goal === 0 ? (
+          {goal == null || goal <= 0 ? (
             <p className="text-sm text-gray-400">Sem meta definida</p>
           ) : (
             <>

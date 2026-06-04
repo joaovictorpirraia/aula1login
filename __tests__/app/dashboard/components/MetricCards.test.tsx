@@ -22,6 +22,11 @@ describe('MetricCards', () => {
     expect(screen.getByText('Sem meta definida')).toBeInTheDocument()
   })
 
+  it('renders "Sem meta definida" when goal is negative (legacy data guard)', () => {
+    render(<MetricCards totalSales={5000} openDeals={0} goal={-100} />)
+    expect(screen.getByText('Sem meta definida')).toBeInTheDocument()
+  })
+
   it('renders progress percentage when goal is set', () => {
     render(<MetricCards totalSales={30000} openDeals={0} goal={60000} />)
     expect(screen.getByText('50%')).toBeInTheDocument()

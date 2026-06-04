@@ -64,9 +64,13 @@ export function SalesChart({ data }: SalesChartProps) {
                 tickLine={false}
               />
               <YAxis
-                tickFormatter={(v: number) =>
-                  v >= 1000 ? `R$${(v / 1000).toFixed(0)}k` : `R$${v}`
-                }
+                tickFormatter={(v: number) => {
+                  if (v >= 1000) {
+                    const k = (v / 1000).toFixed(1).replace('.0', '')
+                    return `R$${k}k`
+                  }
+                  return `R$${Math.round(v)}`
+                }}
                 tick={{ fontSize: 12, fill: '#9ca3af' }}
                 axisLine={false}
                 tickLine={false}
