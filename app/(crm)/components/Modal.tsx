@@ -11,7 +11,7 @@ interface ModalProps {
   title: string
   isOpen: boolean
   onClose: () => void
-  children: React.ReactNode
+  children: React.ReactNode  // React.ReactNode available via 'use client' JSX context
 }
 
 export function Modal({ title, isOpen, onClose, children }: ModalProps) {
