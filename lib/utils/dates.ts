@@ -12,3 +12,9 @@ export function formatCurrency(value: number): string {
     currency: 'BRL',
   }).format(value)
 }
+
+export function getSixMonthsAgoUTC(): { start: Date; startStr: string } {
+  const now = new Date()
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, 1))
+  return { start, startStr: start.toISOString().split('T')[0] }
+}

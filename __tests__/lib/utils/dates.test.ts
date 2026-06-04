@@ -1,4 +1,4 @@
-import { getMonthBoundariesUTC, formatCurrency } from '@/lib/utils/dates'
+import { getMonthBoundariesUTC, formatCurrency, getSixMonthsAgoUTC } from '@/lib/utils/dates'
 
 describe('getMonthBoundariesUTC', () => {
   it('returns start as first day of current month at midnight UTC', () => {
@@ -42,5 +42,27 @@ describe('formatCurrency', () => {
   it('formats zero correctly', () => {
     const result = formatCurrency(0)
     expect(result).toContain('0,00')
+  })
+})
+
+describe('getSixMonthsAgoUTC', () => {
+  it('returns start as first day of month, 6 months ago, at midnight UTC', () => {
+    const { start } = getSixMonthsAgoUTC()
+    expect(start.getUTCDate()).toBe(1)
+    expect(start.getUTCHours()).toBe(0)
+    expect(start.getUTCMinutes()).toBe(0)
+    expect(start.getUTCSeconds()).toBe(0)
+  })
+
+  it('returns startStr in YYYY-MM-01 format', () => {
+    const { startStr } = getSixMonthsAgoUTC()
+    expect(startStr).toMatch(/^\d{4}-\d{2}-01$/)
+  })
+
+  it('start is before the current month start', () => {
+    const { start } = getSixMonthsAgoUTC()
+    const now = new Date()
+    const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    expect(start.getTime()).toBeLessThan(currentMonthStart.getTime())
   })
 })
