@@ -17,6 +17,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .
+RUN mkdir -p /app/public
 RUN npm run build
 
 # Stage 3: Production runtime
