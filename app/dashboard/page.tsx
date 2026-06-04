@@ -23,13 +23,19 @@ export default async function DashboardPage() {
 
   if (!user) redirect('/login')
 
-  const [totalSales, openDeals, goal, chartData, recentDeals] = await Promise.all([
+  const results = await Promise.allSettled([
     getTotalSales(),
     getOpenDealsCount(),
     getMonthlyGoal(),
     getChartData(),
     getRecentDeals(),
   ])
+
+  const totalSales = results[0].status === 'fulfilled' ? results[0].value : 0
+  const openDeals  = results[1].status === 'fulfilled' ? results[1].value : 0
+  const goal       = results[2].status === 'fulfilled' ? results[2].value : null
+  const chartData  = results[3].status === 'fulfilled' ? results[3].value : []
+  const recentDeals = results[4].status === 'fulfilled' ? results[4].value : []
 
   return (
     <div className="min-h-screen bg-gray-50">

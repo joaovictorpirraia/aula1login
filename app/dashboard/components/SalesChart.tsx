@@ -64,11 +64,13 @@ export function SalesChart({ data }: SalesChartProps) {
                 tickLine={false}
               />
               <YAxis
-                tickFormatter={(v: number) => `R$${(v / 1000).toFixed(0)}k`}
+                tickFormatter={(v: number) =>
+                  v >= 1000 ? `R$${(v / 1000).toFixed(0)}k` : `R$${v}`
+                }
                 tick={{ fontSize: 12, fill: '#9ca3af' }}
                 axisLine={false}
                 tickLine={false}
-                width={48}
+                width={56}
               />
               <Tooltip content={<CustomTooltip />} />
               <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />

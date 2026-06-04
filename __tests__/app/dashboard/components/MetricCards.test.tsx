@@ -17,6 +17,11 @@ describe('MetricCards', () => {
     expect(screen.getByText('Sem meta definida')).toBeInTheDocument()
   })
 
+  it('renders "Sem meta definida" when goal is 0 (avoids division by zero)', () => {
+    render(<MetricCards totalSales={5000} openDeals={0} goal={0} />)
+    expect(screen.getByText('Sem meta definida')).toBeInTheDocument()
+  })
+
   it('renders progress percentage when goal is set', () => {
     render(<MetricCards totalSales={30000} openDeals={0} goal={60000} />)
     expect(screen.getByText('50%')).toBeInTheDocument()

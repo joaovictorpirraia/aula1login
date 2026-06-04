@@ -9,7 +9,7 @@ interface MetricCardsProps {
 }
 
 export function MetricCards({ totalSales, openDeals, goal }: MetricCardsProps) {
-  const progress = goal != null ? Math.min(Math.round((totalSales / goal) * 100), 100) : 0
+  const progress = goal != null && goal > 0 ? Math.min(Math.round((totalSales / goal) * 100), 100) : 0
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -46,7 +46,7 @@ export function MetricCards({ totalSales, openDeals, goal }: MetricCardsProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {goal === null ? (
+          {goal == null || goal === 0 ? (
             <p className="text-sm text-gray-400">Sem meta definida</p>
           ) : (
             <>
