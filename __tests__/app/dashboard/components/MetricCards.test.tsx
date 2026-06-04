@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { MetricCards } from '@/app/dashboard/components/MetricCards'
+import { MetricCards } from '@/app/(crm)/dashboard/components/MetricCards'
 
 describe('MetricCards', () => {
   it('renders total sales formatted as BRL', () => {

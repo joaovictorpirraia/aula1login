@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { SalesChart } from '@/app/dashboard/components/SalesChart'
+import { SalesChart } from '@/app/(crm)/dashboard/components/SalesChart'
 
 // Recharts uses ResizeObserver which doesn't exist in jsdom
 global.ResizeObserver = jest.fn().mockImplementation(() => ({

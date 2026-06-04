@@ -13,7 +13,7 @@ jest.mock('react', () => ({
   cache: (fn: unknown) => fn,
 }))
 
-import { getTotalSales, getOpenDealsCount, getMonthlyGoal, getChartData, getRecentDeals } from '@/app/dashboard/queries'
+import { getTotalSales, getOpenDealsCount, getMonthlyGoal, getChartData, getRecentDeals } from '@/app/(crm)/dashboard/queries'
 
 function buildChain(terminal: jest.Mock) {
   const chain: Record<string, jest.Mock> = {
@@ -203,10 +203,10 @@ describe('getChartData', () => {
 })
 
 describe('getRecentDeals', () => {
-  it('returns array of deals', async () => {
+  it('returns array of deals with displayName from clients join', async () => {
     const deals = [
-      { id: '1', client_name: 'Empresa A', value: '5000', status: 'won', created_at: '2026-06-01' },
-      { id: '2', client_name: 'Empresa B', value: '3000', status: 'open', created_at: '2026-05-28' },
+      { id: '1', client_name: 'Empresa A', client_id: 'c1', value: '5000', status: 'won', created_at: '2026-06-01', clients: { name: 'Empresa A (CRM)' } },
+      { id: '2', client_name: 'Empresa B', client_id: null, value: '3000', status: 'open', created_at: '2026-05-28', clients: null },
     ]
     const mockChain = {
       select: jest.fn().mockReturnThis(),
@@ -217,7 +217,10 @@ describe('getRecentDeals', () => {
 
     const result = await getRecentDeals()
     expect(result).toHaveLength(2)
-    expect(result[0].client_name).toBe('Empresa A')
+    // When clients join returns a name, displayName uses it
+    expect(result[0].displayName).toBe('Empresa A (CRM)')
+    // When clients is null, displayName falls back to client_name
+    expect(result[1].displayName).toBe('Empresa B')
   })
 
   it('returns empty array when no deals', async () => {
