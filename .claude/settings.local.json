@@ -36,7 +36,9 @@
       "Bash(findstr -i \"lucide\\\\|next\\\\|react\")",
       "Bash(Get-ChildItem C:\\\\Users\\\\João Victor\\\\Desktop\\\\CURSOIA\\\\aula1login\\\\components\\\\ui *)",
       "Bash(Out-Null)",
-      "Bash(Write-Host \"Created\")"
+      "Bash(Write-Host \"Created\")",
+      "PowerShell(git config *)",
+      "PowerShell(winget install *)"
     ]
   }
 }
