@@ -1,7 +1,7 @@
 # CRM Completo — Sidebar + 5 Seções
 
 **Data:** 2026-06-04
-**Status:** Aprovado (revisado após code review)
+**Status:** Aprovado (revisado após 2 rounds de code review)
 
 ---
 
@@ -55,19 +55,19 @@ interface ModalProps {
   children: React.ReactNode
 }
 ```
-Implementado com shadcn/ui `Dialog`. Cada seção passa seu próprio formulário como `children`. Não é uma abstração de formulário — só encapsula abertura/fechamento e título.
+Implementado com shadcn/ui `Dialog`. Cada seção passa seu próprio formulário como `children`.
 
 ### Obtenção do usuário no layout
 
-`(crm)/layout.tsx` usa `supabase.auth.getSession()` para obter o e-mail do usuário a partir do JWT em cache (sem network call extra ao Supabase). O middleware já garantiu que a sessão é válida:
+`(crm)/layout.tsx` usa `supabase.auth.getUser()` — **não** `getSession()`. O motivo: `getSession()` só lê o JWT do cookie sem revalidar com o servidor Auth, tornando-o inseguro para acesso server-side (uma sessão revogada ainda pareceria válida). `getUser()` sempre revalida o token com o Supabase Auth Server.
 
 ```tsx
 // layout.tsx — Server Component
-const { data: { session } } = await supabase.auth.getSession()
-const userEmail = session?.user?.email ?? ''
+const { data: { user } } = await supabase.auth.getUser()
+const userEmail = user?.email ?? ''
 ```
 
-Isso evita um segundo round-trip ao Supabase Auth por page load.
+O round-trip extra ao Supabase é intencional por segurança.
 
 ---
 
@@ -107,7 +107,7 @@ CREATE POLICY "clients: deleção própria"
 -- Índice de listagem
 CREATE INDEX IF NOT EXISTS idx_clients_user ON clients (user_id, created_at DESC);
 
--- Unicidade de e-mail por usuário (permite NULL — cliente sem e-mail)
+-- Unicidade de e-mail por usuário (permite NULL)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_user_email
   ON clients (user_id, email)
   WHERE email IS NOT NULL;
@@ -129,8 +129,7 @@ FOR EACH ROW EXECUTE FUNCTION set_clients_updated_at();
 ### Atualização em `deals`
 
 ```sql
--- client_name torna-se nullable (era NOT NULL) para suportar deals criados via Kanban
--- que derivam o nome do cliente via JOIN, sem precisar de campo duplicado
+-- client_name torna-se nullable para suportar deals criados via Kanban
 ALTER TABLE deals ALTER COLUMN client_name DROP NOT NULL;
 
 -- client_id nullable — compatibilidade com deals existentes
@@ -138,32 +137,59 @@ ALTER TABLE deals ADD COLUMN client_id uuid REFERENCES clients(id) ON DELETE SET
 
 -- Índice para lookup de deals por cliente
 CREATE INDEX IF NOT EXISTS idx_deals_client ON deals (client_id);
+
+-- Trigger para garantir que client_id referencie um cliente do mesmo usuário
+-- Previne exposição cross-user via JOIN em getDealsWithClients()
+CREATE OR REPLACE FUNCTION check_deal_client_ownership()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.client_id IS NOT NULL THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM clients
+      WHERE id = NEW.client_id AND user_id = NEW.user_id
+    ) THEN
+      RAISE EXCEPTION 'client_id must reference a client owned by the same user';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_deal_client_ownership
+BEFORE INSERT OR UPDATE ON deals
+FOR EACH ROW EXECUTE FUNCTION check_deal_client_ownership();
 ```
 
-**Regra de exibição do nome do cliente:**
+**Regra de exibição do nome do cliente (aplicada em TODAS as views):**
 - Se `client_id IS NOT NULL`: exibir `clients.name` via JOIN
 - Se `client_id IS NULL` e `client_name IS NOT NULL`: exibir `client_name` (deal legado)
 - Se ambos nulos: exibir "–"
 
-Esta lógica se aplica a Pipeline, Kanban e qualquer view que liste deals.
+Esta lógica se aplica a Pipeline, Kanban, Dashboard (DealsTable) e qualquer view que liste deals. **A query `getRecentDeals()` existente deve ser atualizada para aplicar este fallback.**
 
-### Atualização em `monthly_goals` — política de escrita para usuários
+### monthly_goals — sem alteração de RLS
 
-Para que Configurações possa fazer UPSERT via client normal (sem service role em Server Action):
+As políticas de monthly_goals permanecem como estão (somente SELECT para usuários autenticados, sem INSERT/UPDATE). Isso evita que vendedores alterem suas próprias metas.
 
-```sql
--- Adicionar política de escrita para o próprio usuário
-CREATE POLICY "goals: escrita própria"
-  ON monthly_goals FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+`saveMeta` usa o **admin client** (service role) exclusivamente para esta operação, com o `user_id` extraído explicitamente da sessão server-side — não de input do usuário. Esta é a única exceção documentada ao princípio "sem service role em Server Actions":
 
-CREATE POLICY "goals: atualização própria"
-  ON monthly_goals FOR UPDATE
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
+```typescript
+// app/(crm)/configuracoes/actions.ts
+'use server'
+export async function saveMeta(month: string, value: number) {
+  const supabase = createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Não autenticado')
+
+  // Admin client usado apenas aqui, com user_id forçado da sessão server-side
+  const admin = createSupabaseAdminClient()
+  await admin.from('monthly_goals').upsert({
+    user_id: user.id,   // ← sempre da sessão, nunca do input do usuário
+    month,
+    goal_value: value,
+  }, { onConflict: 'user_id,month' })
+}
 ```
-
-Com essas políticas, `saveMeta` usa `createSupabaseServerClient()` (client normal) em vez do admin client — alinhado com a regra existente de nunca usar service role em Server Actions.
 
 ---
 
@@ -173,32 +199,15 @@ Com essas políticas, `saveMeta` usa `createSupabaseServerClient()` (client norm
 
 **Layout:** fixo à esquerda, 240px de largura, altura full. Em mobile: recolhível via hambúrguer.
 
-**Estrutura:**
-```
-┌─────────────────────┐
-│ ◉ CRM Vendas        │  ← Logo + nome
-├─────────────────────┤
-│ 📊 Visão Geral      │  → /dashboard
-│ 👥 Clientes         │  → /clientes
-│ 📈 Pipeline         │  → /pipeline
-│ 🗂  Kanban          │  → /kanban
-│ ⚙️  Configurações   │  → /configuracoes
-├─────────────────────┤
-│ user@email.com      │
-│ [Sair]              │  ← form action={signOut}
-└─────────────────────┘
-```
-
-- Link ativo: fundo azul claro, texto azul escuro (detectado por `usePathname()`)
-- Links inativos: texto cinza, hover com fundo cinza suave
-- `signOut` importado de `@/app/login/actions`
-
 **Props:**
 ```tsx
 interface SidebarProps {
   userEmail: string
 }
 ```
+
+- Link ativo: fundo azul claro, texto azul escuro (detectado por `usePathname()`)
+- `signOut` importado de `@/app/login/actions`
 
 **Layout raiz `(crm)/layout.tsx`:**
 ```tsx
@@ -214,50 +223,60 @@ interface SidebarProps {
 
 ## Seção 2 — Visão Geral (`/dashboard`)
 
-Dashboard atual migrado para `app/(crm)/dashboard/page.tsx`. Sem alterações funcionais:
-- 3 cards de métricas (Total de Vendas, Negócios Abertos, Meta do Mês)
-- Gráfico de barras (vendas do mês)
-- Tabela de deals recentes
+Dashboard atual migrado para `app/(crm)/dashboard/page.tsx`. Remove `Header.tsx`.
 
-Remove `Header.tsx` — sidebar assume navegação.
+As queries em `app/dashboard/queries.ts` são movidas para `app/(crm)/dashboard/queries.ts`.
 
-As queries existentes em `app/dashboard/queries.ts` são movidas para `app/(crm)/dashboard/queries.ts`. Os componentes `MetricCards`, `SalesChart`, `DealsTable` são movidos para `app/(crm)/dashboard/components/`.
+**Atualização obrigatória em `getRecentDeals()`:** após client_name se tornar nullable, a query deve fazer JOIN em clients e aplicar o fallback:
+
+```typescript
+export const getRecentDeals = cache(async () => {
+  const supabase = createSupabaseServerClient()
+  const { data, error } = await supabase
+    .from('deals')
+    .select('id, client_name, client_id, value, status, created_at, clients(name)')
+    .order('created_at', { ascending: false })
+    .limit(10)
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(d => ({
+    ...d,
+    displayName: d.clients?.name ?? d.client_name ?? '–'
+  }))
+})
+```
 
 ---
 
 ## Seção 3 — Clientes (`/clientes`)
 
 ### Funcionalidades
-- Listar todos os clientes do usuário em tabela (Nome, Empresa, E-mail, Telefone, Data)
-- Busca em tempo real por nome ou empresa (client-side filter)
-- Botão "Novo Cliente" → abre Modal com formulário de criação
-- Ação "Editar" por linha → abre Modal com dados preenchidos
-- Ação "Excluir" por linha → confirmação inline com aviso:
-  > "Este cliente tem X deal(s) vinculado(s). Ao excluir, os deals serão mantidos mas perderão a associação com este cliente. Deseja continuar?"
-  > (conta deals via `SELECT COUNT(*) FROM deals WHERE client_id = ?` antes de exibir o modal)
+- Listar todos os clientes em tabela (Nome, Empresa, E-mail, Telefone, Data)
+- Busca client-side por nome ou empresa
+- Botão "Novo Cliente" → Modal com formulário
+- "Editar" por linha → Modal com dados preenchidos
+- "Excluir" por linha → confirmação inline com mensagem genérica:
+  > "Tem certeza que deseja excluir este cliente? Os deals vinculados serão mantidos mas perderão a associação."
 
-### Formulário (modal)
-Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
+  **Não fazer SELECT COUNT antes de exibir o modal.** O aviso é sempre exibido; a contagem real é desnecessária para a UX e adiciona um round-trip gratuito. Se o client tiver 0 deals, a ação simplesmente não afeta nenhum deal.
 
 ### Server Actions
 - `createClient(formData)` — INSERT em clients
 - `updateClient(id, formData)` — UPDATE em clients
-- `deleteClient(id)` — DELETE em clients (ON DELETE SET NULL propaga para deals)
+- `deleteClient(id)` — DELETE em clients; em caso de erro, exibir mensagem ao usuário
 
 ### Queries
-- `getClients()` — SELECT * FROM clients ORDER BY created_at DESC
+- `getClients()` — SELECT FROM clients ORDER BY created_at DESC
 
 ---
 
 ## Seção 4 — Pipeline (`/pipeline`)
 
 ### Funcionalidades
-- 3 cards de resumo no topo: total abertos (R$), total ganhos (R$), total perdidos (R$)
+- 3 cards de resumo: total abertos (R$), total ganhos (R$), total perdidos (R$)
 - Taxa de conversão: `won + lost > 0 ? (won / (won + lost)) × 100 : 0` — exibe "0%" quando não há deals fechados
-- Barras de progresso visual do funil (abertos → ganhos)
-- Tabela completa de deals com colunas: Cliente, Valor, Status (badge), Data de Fechamento
-  - **Coluna Cliente:** `clients.name` se `client_id` existir; senão `deals.client_name`; senão "–"
-- Filtro por status (Todos / Abertos / Ganhos / Perdidos) — client-side
+- Barras de progresso visual do funil
+- Tabela de deals com fallback de nome (clients.name ?? client_name ?? "–")
+- Filtro client-side por status
 
 ### Queries
 - Usa `getDealsWithClients()` — query compartilhada com Kanban (ver abaixo)
@@ -272,37 +291,47 @@ Campos: Nome* | Empresa | E-mail | Telefone | Notas (textarea)
 ### Card de deal
 ```
 ┌───────────────────┐
-│ Nome do Cliente   │  ← clients.name OU deals.client_name OU "–"
+│ Nome do Cliente   │  ← clients.name ?? client_name ?? "–"
 │ R$ 5.000,00       │
 │ [→ Ganho] [→ Perd]│
 └───────────────────┘
 ```
 
-Botões condicionais:
-- Coluna Abertos: botões "Marcar Ganho" e "Marcar Perdido"
-- Coluna Ganhos: botão "Reabrir"
-- Coluna Perdidos: botão "Reabrir"
+Botões condicionais: Abertos→[Ganho][Perdido] | Ganhos→[Reabrir] | Perdidos→[Reabrir]
 
-Botão "Novo Deal" (canto superior direito) → Modal:
-- Selecionar cliente (dropdown dos clients cadastrados)
-- Valor (R$)
-- Status inicial: Aberto
+Botão "Novo Deal" → Modal: selecionar cliente (dropdown), valor
 
 ### Server Actions
-- `moveDeal(id, newStatus)` — UPDATE deals SET status = newStatus
-- `createDeal(clientId, value)`:
-  1. SELECT name FROM clients WHERE id = clientId (obtém o nome)
-  2. INSERT INTO deals (client_id, client_name, value, status) VALUES (clientId, clientName, value, 'open')
 
-### Query compartilhada com Pipeline
+**`moveDeal(id, newStatus)`** — UPDATE deals SET status = newStatus
+- O trigger `trg_set_closed_at` existente cuida automaticamente de `closed_at` e `closed_date`
+- Transições cobertas pelo trigger: open→won, open→lost, won→open, lost→open
+
+**`createDeal(clientId, value)`** — INSERT direto sem pre-fetch de client_name:
+```typescript
+// client_name é nullable — displayName é derivado via JOIN em getDealsWithClients()
+await supabase.from('deals').insert({
+  user_id: user.id,    // da sessão server-side
+  client_id: clientId,
+  value,
+  status: 'open',
+  // client_name omitido — o trigger de ownership valida que clientId pertence ao user
+})
+```
+
+Elimina a race condition do SELECT→INSERT e o round-trip desnecessário.
+
+### Query compartilhada — `getDealsWithClients()`
 
 ```typescript
-// Única query para ambas as páginas — evita round-trip duplo
 export const getDealsWithClients = cache(async () => {
   const supabase = createSupabaseServerClient()
+  // Limita aos últimos 6 meses para evitar payload ilimitado
+  const { start } = getSixMonthsAgoUTC()
   const { data, error } = await supabase
     .from('deals')
     .select('*, clients(name)')
+    .gte('created_at', start.toISOString())
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(deal => ({
@@ -312,35 +341,64 @@ export const getDealsWithClients = cache(async () => {
 })
 ```
 
-Pipeline e Kanban chamam `getDealsWithClients()` e filtram client-side por status.
+- **Janela:** últimos 6 meses por padrão (deals mais antigos ficam fora da view ativa)
+- Pipeline e Kanban filtram client-side por status sobre este conjunto
+- `getSixMonthsAgoUTC()` a ser adicionado em `lib/utils/dates.ts`
 
 ---
 
 ## Seção 6 — Configurações (`/configuracoes`)
 
 ### Funcionalidades
-- Card "Meta do Mês Atual" — mostra meta atual ou "Nenhuma meta definida"
-- Formulário para definir/editar meta do mês atual (campo numérico em R$)
-- Tabela histórico: últimos 6 meses com colunas Mês | Meta | Total Ganho | % Atingido
-
-### Comportamento
-- Se não existir meta para o mês atual: formulário de criação
-- Se existir: formulário de edição com valor atual preenchido
-- Usa `createSupabaseServerClient()` (client normal, **não** admin client) — possível graças às políticas RLS de escrita adicionadas em monthly_goals
+- Card "Meta do Mês Atual" — mostra meta ou "Nenhuma meta definida"
+- Formulário para definir/editar meta do mês (R$)
+- Tabela histórico: últimos 6 meses — Mês | Meta | Total Ganho | % Atingido
 
 ### Server Action
-- `saveMeta(month, value)` — UPSERT em monthly_goals via client normal:
-  ```sql
-  INSERT INTO monthly_goals (user_id, month, goal_value)
-  VALUES (auth.uid(), $month, $value)
-  ON CONFLICT (user_id, month) DO UPDATE SET goal_value = $value
-  ```
+- `saveMeta(month, value)` — UPSERT via admin client com user_id da sessão (ver spec completo na seção de Banco de Dados)
 
-### Queries
-- `getGoalHistory()` — últimos 6 meses:
-  1. SELECT month, goal_value FROM monthly_goals ORDER BY month DESC LIMIT 6
-  2. Para cada mês: SUM(value) FROM deals WHERE status='won' AND closed_date IN [month_start, month_end)
-  - Executadas em paralelo via Promise.allSettled
+### Query — `getGoalHistory()`
+
+**Uma única query** com GROUP BY para evitar N+1:
+
+```typescript
+export const getGoalHistory = cache(async () => {
+  const supabase = createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // Query 1: últimas 6 metas
+  const { data: goals } = await supabase
+    .from('monthly_goals')
+    .select('month, goal_value')
+    .order('month', { ascending: false })
+    .limit(6)
+
+  // Query 2: soma de deals ganhos agrupados por mês (últimos 6 meses) — 1 única query
+  const sixMonthsAgo = new Date()
+  sixMonthsAgo.setUTCMonth(sixMonthsAgo.getUTCMonth() - 6)
+  const { data: wonByMonth } = await supabase
+    .from('deals')
+    .select('closed_date, value')
+    .eq('status', 'won')
+    .gte('closed_date', sixMonthsAgo.toISOString().split('T')[0])
+
+  // Agrupa por mês em JS (evita RPC ou SQL raw)
+  // Total: 2 round-trips ao invés de 7
+  const sumByMonth: Record<string, number> = {}
+  for (const deal of wonByMonth ?? []) {
+    const monthKey = deal.closed_date.slice(0, 7) // 'YYYY-MM'
+    sumByMonth[monthKey] = (sumByMonth[monthKey] ?? 0) + Number(deal.value)
+  }
+
+  return (goals ?? []).map(g => ({
+    month: g.month,
+    goal: Number(g.goal_value),
+    won: sumByMonth[g.month.slice(0, 7)] ?? 0,
+  }))
+})
+```
+
+Total: **2 round-trips** (em vez de 7). Agregação feita em JavaScript sobre conjunto pequeno (≤6 meses de deals ganhos).
 
 ---
 
@@ -348,7 +406,7 @@ Pipeline e Kanban chamam `getDealsWithClients()` e filtram client-side por statu
 
 - Sidebar: fundo branco, borda direita cinza claro
 - Área de conteúdo: fundo `gray-50`
-- Paleta: tons de cinza e azul corporativo (consistente com o dashboard existente)
+- Paleta: tons de cinza e azul corporativo
 - Componentes: shadcn/ui (card, badge, button, input, dialog, progress)
 - Fonte: Inter (já configurada)
 - Layout responsivo: sidebar recolhe em mobile via hambúrguer
@@ -357,8 +415,8 @@ Pipeline e Kanban chamam `getDealsWithClients()` e filtram client-side por statu
 
 ## Fora de Escopo
 
-- Drag and drop no Kanban (botões de mover em vez de arrastar)
-- Convite de membros / multi-usuário na mesma conta
+- Drag and drop no Kanban
+- Convite de membros / multi-usuário
 - Edição de perfil / senha
 - Relatórios exportáveis
 - Notificações
